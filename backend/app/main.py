@@ -202,7 +202,7 @@ async def get_chat_history(current_user: dict = Depends(get_current_user)):
     try:
         user_id = current_user.user.id
         chat_history = supabase.table('chat_messages').select('*').eq('user_id', user_id).order('created_at').execute()
-        return JSONResponse(content={"chat_history": chat_history.data})
+        return JSONResponse(content={"chat_history": chat_history.data}, media_type="application/json; charset=utf-8")
     except Exception as e:
         logger.error(f"Error in get_chat_history: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching chat history: {str(e)}")

@@ -47,6 +47,7 @@ def refresh_access_token():
             st.error(f"Server response: {e.response.text}")
         st.session_state.page = 'login'
 
+
 def login_page():
     st.title("ログインページ")
     email = st.text_input("Email")
@@ -65,6 +66,8 @@ def login_page():
             st.session_state.session = {
                 "expires_at": time.time() + ACCESS_TOKEN_EXPIRE_MINUTES * 60
             }
+            # ユーザー情報を st.session_state.user に設定
+            st.session_state.user = {"email": email}  # email だけですが、他の情報も含められます
             st.session_state.page = 'chat'
             st.success("ログインが成功しました!")
         except requests.exceptions.RequestException as e:
@@ -75,6 +78,7 @@ def login_page():
 
     if st.button("アカウント登録はこちら"):
         st.session_state.page = 'register'
+
 
 def register_page():
     st.title("アカウント登録ページ")

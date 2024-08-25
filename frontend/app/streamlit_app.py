@@ -51,17 +51,25 @@ def login_page():
     password = st.text_input("Password", type="password")
     if st.button("Login"):
         try:
-            res = requests.post(f"{BACKEND_URL}/token", json={"email": email, "password": password})
+            res = requests.post(
+                f"{BACKEND_URL}/token",
+                json={"email": email, "password": password}  # JSONとして送信
+            )
             res.raise_for_status()
             data = res.json()
             st.session_state.access_token = data['access_token']
             st.session_state.refresh_token = data['refresh_token']
+            # ここでセッションを初期化
+            st.session_state.session = {
+                "expires_at": time.time() + ACCESS_TOKEN_EXPIRE_MINUTES * 60
+            }
             st.session_state.page = 'chat'
             st.success("Login successful!")
         except requests.exceptions.RequestException as e:
             st.error(f"Error during login: {str(e)}")
             if hasattr(e.response, 'text'):
                 st.error(f"Server response: {e.response.text}")
+
 
     if st.button("Go to Register"):
         st.session_state.page = 'register'
@@ -100,13 +108,14 @@ def get_chat_history(headers: dict):
 
 def chat_page():
     st.title("Chat")
-    if not st.session_state.access_token:
+    # 追加: sessionが初期化されているかを確認
+    if 'session' not in st.session_state:
         st.error("Please login first")
         st.session_state.page = 'login'
         return
 
-    # トークンの有効期限をチェックし、必要に応じて更新
-    if st.session_state.session.expires_at < time.time():
+    # セッションの有効性をチェックし、必要に応じて更新
+    if st.session_state.session['expires_at'] < time.time():
         refresh_access_token()
 
     headers = {

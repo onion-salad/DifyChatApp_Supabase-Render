@@ -160,8 +160,9 @@ def chat_page():
 
 
 def show_stripe_purchase_button():
-    customer_email = st.session_state.user.email
-    customer_data = supabase.table('user_profiles').select('stripe_customer_id').eq('user_id', st.session_state.user.id).single().execute()
+    # 辞書型からキーを使ってemailにアクセス
+    customer_email = st.session_state.user["email"]
+    customer_data = supabase.table('user_profiles').select('stripe_customer_id').eq('user_id', st.session_state.user['id']).single().execute()
     
     if customer_data.data and customer_data.data.get('stripe_customer_id'):
         customer_id = customer_data.data['stripe_customer_id']
@@ -169,7 +170,7 @@ def show_stripe_purchase_button():
         try:
             customer = stripe.Customer.create(email=customer_email)
             customer_id = customer.id
-            supabase.table('user_profiles').update({'stripe_customer_id': customer_id}).eq('user_id', st.session_state.user.id).execute()
+            supabase.table('user_profiles').update({'stripe_customer_id': customer_id}).eq('user_id', st.session_state.user['id']).execute()
         except Exception as e:
             st.error(f"Error creating Stripe customer: {str(e)}")
             return

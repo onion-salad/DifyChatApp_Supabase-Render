@@ -128,7 +128,7 @@ def chat_page():
     st.sidebar.title("Menu")
 
     # 常に Stripe 購入ボタンを表示
-    st.sidebar.warning("Please purchase access to start chatting.")
+    st.sidebar.warning("チャットを開始するには購入してください")
     show_stripe_purchase_button()
 
     # ユーザー情報を取得
@@ -154,6 +154,52 @@ def chat_page():
                     mime="text/csv"
                 )
 
+
+def show_stripe_purchase_button():
+    customer_email = st.session_state.user.email
+    customer_data = supabase.table('user_profiles').select('stripe_customer_id').eq('user_id', st.session_state.user.id).single().execute()
+    
+    if customer_data.data and customer_data.data.get('stripe_customer_id'):
+        customer_id = customer_data.data['stripe_customer_id']
+    else:
+        try:
+            customer = stripe.Customer.create(email=customer_email)
+            customer_id = customer.id
+            supabase.table('user_profiles').update({'stripe_customer_id': customer_id}).eq('user_id', st.session_state.user.id).execute()
+        except Exception as e:
+            st.error(f"Error creating Stripe customer: {str(e)}")
+            return
+
+    try:
+        checkout_session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[
+                {
+                    'price': os.getenv("STRIPE_PRICE_ID"),
+                    'quantity': 1,
+                },
+            ],
+            mode='payment',
+            success_url=BACKEND_URL + '/payment_success',
+            cancel_url=BACKEND_URL + '/payment_cancel',
+            customer=customer_id,  # 顧客IDを設定
+        )
+        
+        # セッションIDを使って、Stripe.jsでチェックアウトセッションを開始
+        checkout_button = st.sidebar.button("Buy")
+        if checkout_button:
+            # リンク付きの案内文を表示
+            st.write(f'<a href="{checkout_session.url}" target="_blank">Please click here to purchase</a>', unsafe_allow_html=True)
+    except Exception as e:
+        st.error(f"Error creating checkout session: {e}")
+
+    # user_profileをここで定義する
+    user_profile = supabase.table('user_profiles').select('*').eq('user_id', st.session_state.user.id).single().execute().data
+
+    if not user_profile:
+        st.error("User profile not found.")
+        return
+
     # チャット履歴を表示
     if not st.session_state.chat_history:
         st.session_state.chat_history.append({
@@ -170,6 +216,12 @@ def chat_page():
     # チャット入力と送信
     if user_profile.get('is_paid', False):
         message = st.text_area("Enter your message:", height=100)
+
+        # headersをここで定義する
+        headers = {
+            "Authorization": f"Bearer {st.session_state.access_token}"
+        }
+
         if st.button("Send") and message:
             try:
                 response = requests.post(
@@ -196,7 +248,7 @@ def chat_page():
                 if hasattr(e.response, 'text'):
                     st.error(f"Server response: {e.response.text}")
     else:
-        st.write("Please purchase access to start chatting.")
+        st.write("チャットを開始するには購入してください")
 
     if st.sidebar.button("Logout"):
         st.session_state.user = None
@@ -204,6 +256,7 @@ def chat_page():
         st.session_state.refresh_token = None
         st.session_state.chat_history = []
         st.session_state.page = 'login'
+
 
 def main():
     init_session_state()

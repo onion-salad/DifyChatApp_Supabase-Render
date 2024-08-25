@@ -11,7 +11,8 @@ import logging
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi import HTTPException
 import json
-import logging
+from datetime import datetime, timedelta
+from jose import JWTError, jwt
 
 # ログ設定
 logging.basicConfig(level=logging.DEBUG)
@@ -35,6 +36,9 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 if not all([SUPABASE_URL, SUPABASE_KEY, SUPABASE_SERVICE_ROLE_KEY, FRONTEND_URL]):
     logger.error("Environment variables are not set properly")
@@ -56,13 +60,70 @@ class ChatMessage(BaseModel):
     user_id: str
     message: str
 
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    refresh_token: str
+
+class TokenData(BaseModel):
+    user_id: str
+
+def create_access_token(data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
-        user = supabase.auth.get_user(credentials.credentials)
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+        user = supabase.auth.get_user(user_id)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
         return user
-    except Exception as e:
-        logger.error(f"Error authenticating user: {str(e)}")
+    except JWTError as e:
+        logger.error(f"Error decoding JWT: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+
+@app.post("/token")
+async def login_for_access_token(email: str, password: str):
+    try:
+        res = supabase.auth.sign_in({"email": email, "password": password})
+        if res.user:
+            access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+            access_token = create_access_token(
+                data={"sub": res.user.id}, expires_delta=access_token_expires
+            )
+            refresh_token = res.session.refresh_token
+            return JSONResponse(content={"access_token": access_token, "token_type": "bearer", "refresh_token": refresh_token})
+        else:
+            raise HTTPException(status_code=400, detail="Login failed")
+    except Exception as e:
+        logger.error(f"Error during login: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error during login: {str(e)}")
+
+@app.post("/refresh_token")
+async def refresh_access_token(refresh_token: str):
+    try:
+        new_session = supabase.auth.refresh_session(refresh_token)
+        if new_session.user:
+            access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+            access_token = create_access_token(
+                data={"sub": new_session.user.id}, expires_delta=access_token_expires
+            )
+            return JSONResponse(content={"access_token": access_token, "token_type": "bearer", "refresh_token": new_session.refresh_token})
+        else:
+            raise HTTPException(status_code=400, detail="Failed to refresh token")
+    except Exception as e:
+        logger.error(f"Error during token refresh: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error during token refresh: {str(e)}")
 
 @app.post("/register")
 async def register(email: str, password: str):
@@ -91,6 +152,8 @@ async def auth_callback(request: Request, response: Response):
     except Exception as e:
         logger.error(f"Error in auth_callback: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error handling OAuth callback: {str(e)}")
+
+# その他のエンドポイントはそのまま
 
 def chat_with_dify(message: str, user_id: str) -> dict:
     url = f"{DIFY_API_URL}/chat-messages"

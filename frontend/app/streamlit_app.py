@@ -25,48 +25,25 @@ def init_session_state():
         st.session_state.page = 'login'
     if 'user' not in st.session_state:
         st.session_state.user = None
-    if 'session' not in st.session_state:
-        st.session_state.session = None
+    if 'access_token' not in st.session_state:
+        st.session_state.access_token = None
+    if 'refresh_token' not in st.session_state:
+        st.session_state.refresh_token = None
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
 
-def show_stripe_purchase_button():
-    customer_email = st.session_state.user.email
-    customer_data = supabase.table('user_profiles').select('stripe_customer_id').eq('user_id', st.session_state.user.id).single().execute()
-    
-    if customer_data.data and customer_data.data.get('stripe_customer_id'):
-        customer_id = customer_data.data['stripe_customer_id']
-    else:
-        try:
-            customer = stripe.Customer.create(email=customer_email)
-            customer_id = customer.id
-            supabase.table('user_profiles').update({'stripe_customer_id': customer_id}).eq('user_id', st.session_state.user.id).execute()
-        except Exception as e:
-            st.error(f"Error creating Stripe customer: {str(e)}")
-            return
-
+def refresh_access_token():
     try:
-        checkout_session = stripe.checkout.Session.create(
-            payment_method_types=['card'],
-            line_items=[
-                {
-                    'price': os.getenv("STRIPE_PRICE_ID"),
-                    'quantity': 1,
-                },
-            ],
-            mode='payment',
-            success_url=BACKEND_URL + '/payment_success',
-            cancel_url=BACKEND_URL + '/payment_cancel',
-            customer=customer_id,  # 顧客IDを設定
-        )
-        
-        # セッションIDを使って、Stripe.jsでチェックアウトセッションを開始
-        checkout_button = st.sidebar.button("Buy")
-        if checkout_button:
-            # リンク付きの案内文を表示
-            st.write(f'<a href="{checkout_session.url}" target="_blank">Please click here to purchase</a>', unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"Error creating checkout session: {e}")
+        res = requests.post(f"{BACKEND_URL}/refresh_token", json={"refresh_token": st.session_state.refresh_token})
+        res.raise_for_status()
+        data = res.json()
+        st.session_state.access_token = data['access_token']
+        st.session_state.refresh_token = data['refresh_token']
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error refreshing token: {str(e)}")
+        if hasattr(e.response, 'text'):
+            st.error(f"Server response: {e.response.text}")
+        st.session_state.page = 'login'
 
 def login_page():
     st.title("Login")
@@ -74,16 +51,17 @@ def login_page():
     password = st.text_input("Password", type="password")
     if st.button("Login"):
         try:
-            res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-            if res.user:
-                st.session_state.user = res.user
-                st.session_state.session = res.session
-                st.session_state.page = 'chat'
-                st.success("Login successful!")
-            else:
-                st.error("Login failed. Please check your credentials.")
-        except Exception as e:
+            res = requests.post(f"{BACKEND_URL}/token", json={"email": email, "password": password})
+            res.raise_for_status()
+            data = res.json()
+            st.session_state.access_token = data['access_token']
+            st.session_state.refresh_token = data['refresh_token']
+            st.session_state.page = 'chat'
+            st.success("Login successful!")
+        except requests.exceptions.RequestException as e:
             st.error(f"Error during login: {str(e)}")
+            if hasattr(e.response, 'text'):
+                st.error(f"Server response: {e.response.text}")
 
     if st.button("Go to Register"):
         st.session_state.page = 'register'
@@ -96,7 +74,6 @@ def register_page():
         try:
             res = supabase.auth.sign_up({"email": email, "password": password})
             if res.user:
-                # user_profiles テーブルへのレコード挿入はトリガー関数が行うので不要
                 st.success("Registration successful!")
                 st.session_state.page = 'login'
             else:
@@ -107,7 +84,7 @@ def register_page():
     if st.button("Back to Login"):
         st.session_state.page = 'login'
 
-def get_chat_history(headers: dict):  # headers を引数に追加
+def get_chat_history(headers: dict):
     try:
         chat_history_response = requests.get(f"{BACKEND_URL}/chat_history", headers=headers)
         chat_history_response.raise_for_status()
@@ -123,24 +100,17 @@ def get_chat_history(headers: dict):  # headers を引数に追加
 
 def chat_page():
     st.title("Chat")
-    if not st.session_state.user or not st.session_state.session:
+    if not st.session_state.access_token:
         st.error("Please login first")
         st.session_state.page = 'login'
         return
 
-    # セッションの有効性をチェックし、必要に応じて更新
+    # トークンの有効期限をチェックし、必要に応じて更新
     if st.session_state.session.expires_at < time.time():
-        try:
-            res = supabase.auth.refresh_session(st.session_state.session)
-            st.session_state.session = res.session
-        except Exception as e:
-            st.error(f"Error refreshing session: {str(e)}")
-            st.session_state.page = 'login'
-            return
+        refresh_access_token()
 
-    user = st.session_state.user
     headers = {
-        "Authorization": f"Bearer {st.session_state.session.access_token}"
+        "Authorization": f"Bearer {st.session_state.access_token}"
     }
 
     # Stripe 購入ボタン、チャット履歴エクスポートボタン、残チャット回数を表示
@@ -148,10 +118,10 @@ def chat_page():
 
     # 常に Stripe 購入ボタンを表示
     st.sidebar.warning("Please purchase access to start chatting.")
-    show_stripe_purchase_button()  # メニューバーに表示
+    show_stripe_purchase_button()
 
     # ユーザー情報を取得
-    user_profile = supabase.table('user_profiles').select('*').eq('user_id', user.id).single().execute().data
+    user_profile = supabase.table('user_profiles').select('*').eq('user_id', st.session_state.user.id).single().execute().data
     if not user_profile:
         st.error("User profile not found.")
         return
@@ -176,8 +146,8 @@ def chat_page():
     # チャット履歴を表示
     if not st.session_state.chat_history:
         st.session_state.chat_history.append({
-            "role": "assistant",
-            "content": "Hello! I can help you validate your hypotheses by gathering evidence from the web. Feel free to enter your hypothesis in any language."
+            "role": "DIVINEチャット",
+            "content": "こんにちは！美容クリニック「DIVINE」にお問い合わせいただき、ありがとうございます。何かお手伝いできることがあれば、お気軽にお知らせください。"
         })
     for message in st.session_state.chat_history:
         if message['role'] == 'user':
@@ -187,14 +157,14 @@ def chat_page():
             st.markdown(message['content'])
 
     # チャット入力と送信
-    if user_profile.get('is_paid', False):  # 課金済みの場合のみチャット入力欄を表示
-        message = st.text_area("Enter your message:", height=100)  # height パラメータを追加
+    if user_profile.get('is_paid', False):
+        message = st.text_area("Enter your message:", height=100)
         if st.button("Send") and message:
             try:
                 response = requests.post(
                     f"{BACKEND_URL}/chat",
                     json={
-                        "user_id": user.id,
+                        "user_id": st.session_state.user.id,
                         "message": message
                     },
                     headers=headers
@@ -206,8 +176,8 @@ def chat_page():
                     st.session_state.chat_history.append({"role": "user", "content": message})
                     st.session_state.chat_history.append({"role": "assistant", "content": assistant_response})
                     
-                    supabase.table('user_profiles').update({'chat_count': user_profile['chat_count'] + 1}).eq('user_id', user.id).execute()
-                    st.rerun()  # ここを変更
+                    supabase.table('user_profiles').update({'chat_count': user_profile['chat_count'] + 1}).eq('user_id', st.session_state.user.id).execute()
+                    st.rerun()
                 else:
                     st.error("Unexpected response format from server")
             except requests.exceptions.RequestException as e:
@@ -219,7 +189,8 @@ def chat_page():
 
     if st.sidebar.button("Logout"):
         st.session_state.user = None
-        st.session_state.session = None
+        st.session_state.access_token = None
+        st.session_state.refresh_token = None
         st.session_state.chat_history = []
         st.session_state.page = 'login'
 

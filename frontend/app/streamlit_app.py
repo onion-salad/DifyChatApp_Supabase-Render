@@ -10,6 +10,8 @@ import stripe
 
 load_dotenv()
 
+ACCESS_TOKEN_EXPIRE_MINUTES = 30  # アクセストークンの有効期限を30分に設定
+
 # Supabase設定
 supabase: Client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
@@ -46,10 +48,10 @@ def refresh_access_token():
         st.session_state.page = 'login'
 
 def login_page():
-    st.title("Login")
+    st.title("ログインページ")
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
-    if st.button("Login"):
+    if st.button("ログイン"):
         try:
             res = requests.post(
                 f"{BACKEND_URL}/token",
@@ -64,21 +66,21 @@ def login_page():
                 "expires_at": time.time() + ACCESS_TOKEN_EXPIRE_MINUTES * 60
             }
             st.session_state.page = 'chat'
-            st.success("Login successful!")
+            st.success("ログインが成功しました!")
         except requests.exceptions.RequestException as e:
             st.error(f"Error during login: {str(e)}")
             if hasattr(e.response, 'text'):
                 st.error(f"Server response: {e.response.text}")
 
 
-    if st.button("Go to Register"):
+    if st.button("アカウント登録はこちら"):
         st.session_state.page = 'register'
 
 def register_page():
-    st.title("Register")
+    st.title("アカウント登録ページ")
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
-    if st.button("Register"):
+    if st.button("アカウント登録"):
         try:
             res = supabase.auth.sign_up({"email": email, "password": password})
             if res.user:
@@ -89,7 +91,7 @@ def register_page():
         except Exception as e:
             st.error(f"Error during registration: {str(e)}")
 
-    if st.button("Back to Login"):
+    if st.button("ログインはこちら"):
         st.session_state.page = 'login'
 
 def get_chat_history(headers: dict):

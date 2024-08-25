@@ -4,3 +4,4 @@ supabase
 stripe
 python-dotenv
 requests
+python-jose

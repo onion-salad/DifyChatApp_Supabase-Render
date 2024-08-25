@@ -92,17 +92,25 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         logger.error(f"Error decoding JWT: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid authentication credentials")
 
+# リクエストボディのモデルを定義
+class TokenRequest(BaseModel):
+    email: str
+    password: str
+
 @app.post("/token")
-async def login_for_access_token(email: str, password: str):
+async def login_for_access_token(request: TokenRequest):
     try:
-        res = supabase.auth.sign_in({"email": email, "password": password})
+        email = request.email
+        password = request.password
+        # Supabaseの認証APIを使用してユーザーを認証
+        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
         if res.user:
             access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
             access_token = create_access_token(
                 data={"sub": res.user.id}, expires_delta=access_token_expires
             )
             refresh_token = res.session.refresh_token
-            return JSONResponse(content={"access_token": access_token, "token_type": "bearer", "refresh_token": refresh_token})
+            return {"access_token": access_token, "token_type": "bearer", "refresh_token": refresh_token}
         else:
             raise HTTPException(status_code=400, detail="Login failed")
     except Exception as e:
